@@ -60,11 +60,10 @@ class BinanceUnifiedClient:
         }
         return self.get_response(url, params)
 
-    def get_um_trades(self, symbol, endTime, limit):
+    def get_um_trades(self, endTime, limit):
         """查询U本位合约成交记录"""
         url = self.base_url + '/papi/v1/um/userTrades'
         params = {
-            'symbol': symbol,
             'endTime': endTime,
             "limit": limit,
             'timestamp': int(time.time() * 1000)

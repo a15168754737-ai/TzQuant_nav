@@ -12,8 +12,10 @@
 * 获取 **出入金记录（deposit / withdrawal）**
 * 统一数据结构进行处理
 * 计算：
-
-  * 利润（PnL）
+  * 持仓
+  * 利润
+  * 未实现盈亏
+  * 净值曲线
   * 本金变化
 
 适用于账户对账。
@@ -24,9 +26,11 @@
 
 ```
 .
-├── check.py              # 主程序：数据获取 + 利润计算
-├── binance_unified.py   # 交易所接口封装（当前支持 Binance）
-├── requirements.txt     # 依赖列表
+├── binance                   #  bianance
+|   |── binance_unified.py    #  交易所接口封装
+|   |── check.py              #  主程序：数据获取 + 利润计算
+├── utils.py                  #  通用方法
+├── requirements.txt          #  依赖列表
 └── README.md
 ```
 
@@ -45,8 +49,9 @@
 
 * 当前持仓（pos）
 * 累计收益（pnl）
+* 未实现盈亏 （unrealizedPnl）
 * 本金变化（含出入金）
-
+* 净值曲线（nav）
 ---
 
 ## 安装依赖
@@ -60,13 +65,15 @@ pip install -r requirements.txt
 ## requirements.txt 示例
 
 ```
-requests
+ccxt
+matplotlib
 ```
 
 ## 使用方法
 
+如果需要对账binance，需要在主目录下运行
 ```bash
-python3 check.py
+python3 -m binance.check
 ```
 
 ---
@@ -78,6 +85,9 @@ python3 check.py
 ```python
 onlyReadApiKey = "your_api_key"
 onlyReadApiSecret = "your_secret_key"
+startTime = "2026-02-08 21:00:00.000000"  # 对账开始的时间点UTC+8
+endTime = "2026-04-14 17:00:00.000000"  # 对账结束的时间点UTC+8
+interval = 1800000  # 对账的时间颗粒度, 单位为ms
 ```
 
 建议：
@@ -97,7 +107,7 @@ onlyReadApiSecret = "your_secret_key"
 
 支持扩展：
 
-* 其他交易所（OKX / Bybit 等）
+* 其他交易所（Gate / OKX 等）
 * 多账户管理
 
 ---
