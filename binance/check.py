@@ -17,7 +17,7 @@ logging.basicConfig(
 
 
 from utils import (
-    cal_trade,
+    cal_balance_now,
     to_timestamp_ms,
     generate_time_points
 )
@@ -73,6 +73,36 @@ def get_full_ohlcv(symbol, start_ts, end_ts, timeframe='30m'):
     
     return price_map
 
+def cal_trade(symbol, posData, tradeData):
+    """
+    将交易所的成交格式转换成计算利润的统一格式
+    """
+
+    price = float(tradeData['price'])
+    size = abs(float(tradeData['qty']))
+    commissionAsset = tradeData['commissionAsset'] 
+    if commissionAsset == "USDT":
+        fee = float(tradeData["commission"])
+    else:
+        fee = 0
+    side = "buy" if tradeData["side"] == "BUY" else "sell"
+    trade = {
+        "size": size,
+        "price": price,
+        "fee": fee,
+        "side": side
+    }
+    (
+        posData[symbol]['pos'],
+        posData[symbol]['ave_price'],
+        pnl
+    ) = cal_balance_now(
+        pos_size = posData[symbol]['pos'],
+        pos_price = posData[symbol]['ave_price'],
+        trade = trade
+    )
+    posData[symbol]['pnl'] += pnl
+
 
 def get_trades():
     """获取成交记录并且计算利润"""
@@ -82,7 +112,7 @@ def get_trades():
     startTimeStamp = to_timestamp_ms(startTime)
     endTimeStamp = to_timestamp_ms(endTime)
 
-    (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp)
+    (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp, interval)
 
     # 从binance获取成交记录并且记录快照
     binanceTrades = []
@@ -111,7 +141,7 @@ def get_trades():
                 endTimeStamp = int(trade['time']) - 1
                 binanceTrades.append(trade)
         else:
-            logging.error(f"获取{symbol}成交记录接口出错: {response.json()}")
+            logging.error(f"获取成交记录接口出错: {response.json()}")
         if endTimeStamp <= startTimeStamp:
             break
 
@@ -174,7 +204,7 @@ def get_trades():
     
     logging.info(f"保存持仓快照到文件中")
 
-    with open(f'./binance/snapshot.csv', 'w', newline='', encoding='utf-8') as f:
+    with open(f'./binance/positionSnapshot.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         csv_head = ['datetime']
         for symbol in snapshotPositions:
@@ -206,7 +236,7 @@ def get_trans():
     startTimeStamp = to_timestamp_ms(startTime)
     endTimeStamp = to_timestamp_ms(endTime)
 
-    (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp)
+    (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp, interval)
 
     allTransStream = []
 
@@ -321,6 +351,7 @@ if __name__ == '__main__':
 
     logging.info(f"开始计算nav曲线")
     nav = {}
+    nav_csv = {}
     shares = 0
     assets = 0
     preCapital = 0
@@ -330,13 +361,29 @@ if __name__ == '__main__':
         capital = principalSnapshot[timeStamp]
         if len(nav) > 0 and abs(capital - preCapital) >= 1000:
             deltaCapital = capital - preCapital
-            deltaAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + capital - preAssets
             preNav = preAssets / shares if shares > 0 else 1.0
             deltaShares = deltaCapital / preNav if preNav > 0 else 0
             shares += deltaShares
         preCapital = capital
         preAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + capital
         nav[timeStamp] = preAssets / shares if shares > 0 else 1.0
+        nav_csv[timeStamp] = {
+            'nav': round(nav[timeStamp], 6),
+            'assets': round(preAssets, 2)
+        }
+    
+    logging.info(f"保存净值和资产快照到文件中")
+    with open(f'./binance/navSnapshot.csv', 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        csv_head = ['datetime', 'nav', 'assets']
+        writer.writerow(csv_head)
+        for timeStamp in nav_csv:
+            newRow = [
+                ""f"{datetime.fromtimestamp(timeStamp / 1000, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S.%f')}""",
+                nav_csv[timeStamp]['nav'],
+                nav_csv[timeStamp]['assets']
+            ]
+            writer.writerow(newRow)
     
     logging.info(f"开始生成nav的图表")
     sorted_items = sorted(nav.items())

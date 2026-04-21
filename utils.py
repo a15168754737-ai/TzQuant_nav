@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 
-def generate_time_points(start_ts, end_ts):
+def generate_time_points(start_ts, end_ts, interval):
     """
     预处理快照时间线长度
     """
@@ -15,7 +15,7 @@ def generate_time_points(start_ts, end_ts):
 
     startTimeDt = int(start_dt.timestamp() * 1000)
     endTimeDt = int(end_dt.timestamp() * 1000)
-    startTimeDtLen = (endTimeDt - startTimeDt + 1799999) // 1800000
+    startTimeDtLen = (endTimeDt - startTimeDt + interval - 1) // interval
     return startTimeDt, startTimeDtLen
 
 
@@ -83,34 +83,3 @@ def cal_balance_now(pos_size, pos_price, trade):
                 pos_price = trade["price"]
             pnl = -fee
     return pos_size, pos_price, pnl
-
-
-def cal_trade(symbol, posData, tradeData):
-    """
-    将交易所的成交格式转换成计算利润的统一格式
-    """
-
-    price = float(tradeData['price'])
-    size = abs(float(tradeData['qty']))
-    commissionAsset = tradeData['commissionAsset'] 
-    if commissionAsset == "USDT":
-        fee = float(tradeData["commission"])
-    else:
-        fee = 0
-    side = "buy" if tradeData["side"] == "BUY" else "sell"
-    trade = {
-        "size": size,
-        "price": price,
-        "fee": fee,
-        "side": side
-    }
-    (
-        posData[symbol]['pos'],
-        posData[symbol]['ave_price'],
-        pnl
-    ) = cal_balance_now(
-        pos_size = posData[symbol]['pos'],
-        pos_price = posData[symbol]['ave_price'],
-        trade = trade
-    )
-    posData[symbol]['pnl'] += pnl
