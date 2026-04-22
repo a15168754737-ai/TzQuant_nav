@@ -225,6 +225,68 @@ def get_trades():
 
     return pnl
 
+def get_funding_fee():
+    """
+    获取账户的资金费记录
+    """
+    logging.info(f"开始获取账户资金费记录")
+
+    startTimeStamp = to_timestamp_ms(startTime)
+    endTimeStamp = to_timestamp_ms(endTime)
+
+    (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp, interval)
+
+    # 获取u本位账户的资金费记录
+    fundingFeeList = []
+    while True:
+        response = binanceApi.get_um_income(endTime=endTimeStamp, incomeType='FUNDING_FEE')
+        if response.status_code == 200:
+            transList = response.json()
+            sortedList = sorted(
+                transList, key=lambda x: x["tranId"], reverse=True
+            )
+            if len(sortedList) == 0:
+                endTimeStamp -= 604800000
+            for trans in sortedList:
+                endTimeStamp = trans['time'] - 1
+                if trans['asset'] != 'USDT':
+                    continue
+                fundingFeeList.append(trans)
+        else:
+            logging.error(f"获取u本位账户的资金费接口出错: {response.json()}")
+        if endTimeStamp <= startTimeStamp:
+            break
+
+    fundingFeeList.reverse()
+
+    fundingFee = [0] * startTimeDtLen
+    nowFundingFee = 0
+
+    for fund in fundingFeeList:
+        nowFundingFee += float(fund['income'])
+        nowTime = int(fund['time'])
+        if nowTime <= startTimeDt:
+            snapshotIndex = 0
+        else:
+            snapshotIndex = (nowTime - startTimeDt + interval - 1) // interval
+        fundingFee[snapshotIndex] = nowFundingFee
+    
+    preFundingFee = 0
+    
+    for index in range(startTimeDtLen):
+        if fundingFee[index] != 0:
+            preFundingFee = fundingFee[index]
+        else:
+            fundingFee[index] = preFundingFee
+    
+    fundingFeeResult = {}
+
+    for index in range(startTimeDtLen):
+        nowTimestamp = startTimeDt + interval * index
+        fundingFeeResult[nowTimestamp] = fundingFee[index]
+    
+    return fundingFeeResult
+
 
 def get_trans():
     """
@@ -348,6 +410,8 @@ def get_trans():
 if __name__ == '__main__':
     pnlSnapshot = get_trades()
     principalSnapshot = get_trans()
+    fundingFeeSnapshot = get_funding_fee()
+
 
     logging.info(f"开始计算nav曲线")
     nav = {}
@@ -365,7 +429,7 @@ if __name__ == '__main__':
             deltaShares = deltaCapital / preNav if preNav > 0 else 0
             shares += deltaShares
         preCapital = capital
-        preAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + capital
+        preAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + fundingFeeSnapshot[timeStamp] + capital
         nav[timeStamp] = preAssets / shares if shares > 0 else 1.0
         nav_csv[timeStamp] = {
             'nav': round(nav[timeStamp], 6),
