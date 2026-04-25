@@ -73,7 +73,7 @@ def get_full_ohlcv(symbol, start_ts, end_ts, timeframe='30m'):
     
     return price_map
 
-def cal_trade(symbol, posData, tradeData):
+def cal_trade(symbol, posData, tradeData, bnbAvePrice):
     """
     将交易所的成交格式转换成计算利润的统一格式
     """
@@ -84,12 +84,11 @@ def cal_trade(symbol, posData, tradeData):
     if commissionAsset == "USDT":
         fee = float(tradeData["commission"])
     else:
-        fee = 0
+        fee = float(tradeData['commission']) * bnbAvePrice
     side = "buy" if tradeData["side"] == "BUY" else "sell"
     trade = {
         "size": size,
         "price": price,
-        "fee": fee,
         "side": side
     }
     (
@@ -101,8 +100,8 @@ def cal_trade(symbol, posData, tradeData):
         pos_price = posData[symbol]['ave_price'],
         trade = trade
     )
+    posData[symbol]['commission'] += fee
     posData[symbol]['pnl'] += pnl
-
 
 def get_trades():
     """获取成交记录并且计算利润"""
@@ -114,12 +113,67 @@ def get_trades():
 
     (startTimeDt, startTimeDtLen) = generate_time_points(startTimeStamp, endTimeStamp, interval)
 
+    logging.info(f"开始获取bnb成交记录")
+
+    spotTrades = []
+
+    while True:
+        response = binanceApi.get_margin_trades(symbol='BNBUSDT', endTime=endTimeStamp, limit=1000)
+        if response.status_code == 200:
+            tmpTrades = response.json()
+            sortedTrades = sorted(
+                tmpTrades, key=lambda x: x["time"], reverse=True
+            )
+            
+            if len(sortedTrades) == 0:
+                endTimeStamp -= 604800000
+            for trade in sortedTrades:
+                endTimeStamp = int(trade['time']) - 1
+                spotTrades.append(trade)
+        else:
+            logging.error(f"获取成交记录接口出错: {response.json()}")
+        if endTimeStamp <= startTimeStamp:
+            break
+    
+    spotTrades.reverse()
+
+    avePriceList = [0] * startTimeDtLen
+    qty = 0
+    avePrice = 0
+
+    for trade in spotTrades:
+        tradeSize = float(trade['qty']) - float(trade['commission'])
+        avePrice = (qty * avePrice + tradeSize * float(trade['price'])) / (qty + tradeSize)
+        qty = qty + tradeSize
+
+        nowTime = int(trade['time'])
+        if nowTime <= startTimeDt:
+            snapshotIndex = 0
+        else:
+            snapshotIndex = (nowTime - startTimeDt + interval - 1) // interval
+        avePriceList[snapshotIndex] = avePrice
+    
+    preAvePrice = 0
+
+    for index in range(startTimeDtLen):
+        if avePriceList[index] != 0:
+            preAvePrice = avePriceList[index]
+        else:
+            avePriceList[index] = preAvePrice
+    
+    avePriceSnapshot = {}
+
+    for index in range(startTimeDtLen):
+        nowTimestamp = startTimeDt + interval * index
+        avePriceSnapshot[nowTimestamp] = avePriceList[index]
+
+
+    endTimeStamp = to_timestamp_ms(endTime)
     # 从binance获取成交记录并且记录快照
     binanceTrades = []
-    existSymbols = set()
     snapshotPositions = {}
 
-    logging.info(f"开始获取成交记录")
+    logging.info(f"开始u本位获取成交记录")
     while True:
         response = binanceApi.get_um_trades(endTime=endTimeStamp, limit=1000)
         if response.status_code == 200:
@@ -131,11 +185,11 @@ def get_trades():
                 endTimeStamp -= 604800000
             for trade in sortedTrades:
                 symbol = trade['symbol']
-                if symbol not in existSymbols:
-                    existSymbols.add(symbol)
+                if snapshotPositions.get(symbol) is None:
                     snapshotPositions[symbol] = [{
                         'pos': 0,
                         'ave_price': 0,
+                        'commission': 0,
                         'pnl': 0
                     } for i in range(startTimeDtLen)]
                 endTimeStamp = int(trade['time']) - 1
@@ -146,7 +200,6 @@ def get_trades():
             break
 
     kline_cache = {}
-    startTimeStamp = to_timestamp_ms(startTime)
     endTimeStamp = to_timestamp_ms(endTime)
 
     for symbol in snapshotPositions:
@@ -159,17 +212,18 @@ def get_trades():
 
     for trade in binanceTrades:
         symbol = trade['symbol']
-        if symbol not in posData:
-            posData[symbol] = {
-                'pos': 0,
-                'ave_price': 0,
-                'pnl': 0
-            }
-        cal_trade(symbol, posData, trade)
         if int(trade['time']) <= startTimeDt:
             snapshotIndex = 0
         else:
             snapshotIndex = (int(trade['time']) - startTimeDt + interval - 1) // interval
+        if symbol not in posData:
+            posData[symbol] = {
+                'pos': 0,
+                'ave_price': 0,
+                'commission': 0,
+                'pnl': 0
+            }
+        cal_trade(symbol, posData, trade, avePriceList[snapshotIndex])
         snapshotPositions[symbol][snapshotIndex] = deepcopy(posData[symbol])
 
     pnl = {}
@@ -180,6 +234,7 @@ def get_trades():
         nowPos = {
             'pos': 0,
             'ave_price': 0,
+            'commission': 0,
             'pnl': 0
         }
         for index in range(len(snapshotPositions[symbol])):
@@ -187,6 +242,7 @@ def get_trades():
             if pnl.get(nowTimestamp) is None:
                 pnl[nowTimestamp] = {
                     'pnl': 0,
+                    'commission': 0,
                     'unrealizedPnl': 0
                 }
             if snapshotPositions[symbol][index]['pos'] != 0:
@@ -199,6 +255,7 @@ def get_trades():
             else:
                 close = kline_cache[symbol].get(nowTimestamp)
             pnl[nowTimestamp]['pnl'] += snapshotPositions[symbol][index]['pnl']
+            pnl[nowTimestamp]['commission'] += snapshotPositions[symbol][index]['commission']
             pnl[nowTimestamp]['unrealizedPnl'] += snapshotPositions[symbol][index]['pos'] * (close - snapshotPositions[symbol][index]['ave_price'])
 
     
@@ -429,23 +486,33 @@ if __name__ == '__main__':
             deltaShares = deltaCapital / preNav if preNav > 0 else 0
             shares += deltaShares
         preCapital = capital
-        preAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + fundingFeeSnapshot[timeStamp] + capital
+        preAssets = pnlSnapshot[timeStamp]['pnl'] + pnlSnapshot[timeStamp]['unrealizedPnl'] + pnlSnapshot[timeStamp]['commission'] + fundingFeeSnapshot[timeStamp] + capital
         nav[timeStamp] = preAssets / shares if shares > 0 else 1.0
         nav_csv[timeStamp] = {
             'nav': round(nav[timeStamp], 6),
-            'assets': round(preAssets, 2)
+            'assets': round(preAssets, 2),
+            'capital': round(principalSnapshot[timeStamp], 6),
+            'pnl': round(pnlSnapshot[timeStamp]['pnl'], 6),
+            'unrealizedPnl': round(pnlSnapshot[timeStamp]['unrealizedPnl'], 6),
+            'fundingFee': round(fundingFeeSnapshot[timeStamp], 6),
+            'commission': round(pnlSnapshot[timeStamp]['commission'], 6)
         }
     
     logging.info(f"保存净值和资产快照到文件中")
     with open(f'./binance/navSnapshot.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        csv_head = ['datetime', 'nav', 'assets']
+        csv_head = ['datetime', 'nav', 'assets', 'capital', 'pnl', 'unrealizedPnl', 'fundingFee', 'commission']
         writer.writerow(csv_head)
         for timeStamp in nav_csv:
             newRow = [
                 ""f"{datetime.fromtimestamp(timeStamp / 1000, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S.%f')}""",
                 nav_csv[timeStamp]['nav'],
-                nav_csv[timeStamp]['assets']
+                nav_csv[timeStamp]['assets'],
+                nav_csv[timeStamp]['capital'],
+                nav_csv[timeStamp]['pnl'],
+                nav_csv[timeStamp]['unrealizedPnl'],
+                nav_csv[timeStamp]['fundingFee'],
+                nav_csv[timeStamp]['commission']
             ]
             writer.writerow(newRow)
     

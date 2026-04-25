@@ -37,41 +37,38 @@ def cal_balance_now(pos_size, pos_price, trade):
     """
     输入成交记录 持仓数量 持仓均价 手续费(/USD) 输出 本次利润和 新的持仓数量和持仓均价
     """
-    fee = trade["fee"]
     # long position
+    pnl = 0
     if pos_size > 0:
         # BUY OPEN
         if trade["side"] == "buy":
             old_volume = pos_price * pos_size
             pos_size += trade["size"]
             pos_price = (trade["size"] * trade["price"] + old_volume) / pos_size
-            pnl = -fee
         # SELL CLOSE OR SELL CLOSE AND SELL OPEN
         else:
             # SELL CLOSE AND SELL OPEN
             if trade["size"] > pos_size:
-                pnl = (trade["price"] - pos_price) * pos_size - fee
+                pnl = (trade["price"] - pos_price) * pos_size
                 pos_size -= trade["size"]
                 pos_price = trade["price"]
             # SELL CLOSE
             else:
                 pos_size -= trade["size"]
-                pnl = (trade["price"] - pos_price) * trade["size"] - fee
+                pnl = (trade["price"] - pos_price) * trade["size"]
     # short position or no position
     else:
         if trade["side"] == "buy":
             # BUY CLOSE AND BUY OPEN
             if trade["size"] > -pos_size:
                 if pos_size:
-                    pnl = (pos_price - trade["price"]) * -pos_size - fee
-                else:
-                    pnl = -fee
+                    pnl = (pos_price - trade["price"]) * -pos_size
                 pos_size += trade["size"]
                 pos_price = trade["price"]
             # BUY CLOSE
             else:
                 pos_size += trade["size"]
-                pnl = (pos_price - trade["price"]) * trade["size"] - fee
+                pnl = (pos_price - trade["price"]) * trade["size"]
         # SELL OPEN
         else:
             if pos_size:
@@ -81,5 +78,4 @@ def cal_balance_now(pos_size, pos_price, trade):
             else:
                 pos_size -= trade["size"]
                 pos_price = trade["price"]
-            pnl = -fee
     return pos_size, pos_price, pnl

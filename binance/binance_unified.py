@@ -80,3 +80,14 @@ class BinanceUnifiedClient:
             'timestamp': int(time.time() * 1000)
         }
         return self.get_response(url, params)
+
+    def get_margin_trades(self, symbol, endTime, limit):
+        """查询现货成交记录"""
+        url = self.base_url + '/papi/v1/margin/myTrades'
+        params = {
+            'symbol': symbol,
+            'endTime': endTime,
+            "limit": limit,
+            'timestamp': int(time.time() * 1000)
+        }
+        return self.get_response(url, params)
